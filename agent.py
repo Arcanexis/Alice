@@ -2,6 +2,7 @@ import re
 import subprocess
 import os
 import sys
+from datetime import datetime, timedelta
 from openai import OpenAI
 import config
 from snapshot_manager import SnapshotManager
@@ -12,6 +13,7 @@ class AliceAgent:
         self.prompt_path = prompt_path or config.DEFAULT_PROMPT_PATH
         self.memory_path = config.MEMORY_FILE_PATH
         self.todo_path = config.TODO_FILE_PATH
+        self.stm_path = config.SHORT_TERM_MEMORY_FILE_PATH
         self.client = OpenAI(
             base_url=config.BASE_URL,
             api_key=config.API_KEY
@@ -31,12 +33,16 @@ class AliceAgent:
         # 确保输出目录存在
         os.makedirs(config.ALICE_OUTPUT_DIR, exist_ok=True)
         
+        # 启动时管理记忆（滚动与提炼）
+        self.manage_memory()
+        
         self._refresh_system_message()
 
     def _refresh_system_message(self):
-        """刷新系统消息，注入最新的提示词、长期记忆、任务清单和文件索引快照"""
+        """刷新系统消息，注入最新的提示词、长期记忆、短期记忆、任务清单和文件索引快照"""
         self.system_prompt = self._load_prompt()
         self.memory_content = self._load_file_content(self.memory_path, "暂无长期记忆。")
+        self.stm_content = self._load_file_content(self.stm_path, "暂无近期记忆。")
         self.todo_content = self._load_file_content(self.todo_path, "暂无活跃任务。")
         self.snapshot_mgr.refresh() # 刷新快照
         self.index_text = self.snapshot_mgr.get_index_text()
@@ -44,6 +50,7 @@ class AliceAgent:
         full_system_content = (
             f"{self.system_prompt}\n\n"
             f"### 你的长期记忆 (来自 {self.memory_path})\n{self.memory_content}\n\n"
+            f"### 你的短期记忆 (最近 7 天，来自 {self.stm_path})\n{self.stm_content}\n\n"
             f"### 你的当前任务清单 (来自 {self.todo_path})\n{self.todo_content}\n\n"
             f"### 核心资产索引快照\n{self.index_text}"
         )
@@ -62,6 +69,82 @@ class AliceAgent:
         except Exception as e:
             print(f"加载提示词失败: {e}")
             return "你是一个 AI 助手。"
+
+    def manage_memory(self):
+        """管理短期记忆滚动和长期记忆提炼"""
+        if not os.path.exists(self.stm_path):
+            return
+
+        try:
+            with open(self.stm_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            lines = content.split('\n')
+            sections = {}
+            current_date = None
+            
+            # 解析日期小节
+            for line in lines:
+                match = re.match(r'^## (\d{4}-\d{2}-\d{2})', line)
+                if match:
+                    current_date = match.group(1)
+                    sections[current_date] = [line]
+                elif current_date:
+                    sections[current_date].append(line)
+
+            if not sections:
+                return
+
+            # 计算过期日期（7天前）
+            sorted_dates = sorted(sections.keys())
+            today = datetime.now().date()
+            expiry_limit = today - timedelta(days=7)
+            
+            to_prune = [d for d in sorted_dates if datetime.strptime(d, '%Y-%m-%d').date() < expiry_limit]
+            
+            if to_prune:
+                print(f"[系统]: 发现过期短期记忆 ({len(to_prune)} 天)，正在启动提炼流程...")
+                
+                # 提取过期内容进行总结
+                pruned_content = ""
+                for d in to_prune:
+                    pruned_content += "\n".join(sections[d]) + "\n"
+                
+                # 调用 LLM 进行提炼
+                distill_prompt = (
+                    f"你是一个记忆提炼专家。以下是用户最近 7 天的短期记忆记录：\n\n{content}\n\n"
+                    f"请重点分析即将被删除的旧记忆：\n{pruned_content}\n\n"
+                    "请根据这 7 天的整体背景，结合旧记忆，提炼出具有长期价值的：\n"
+                    "1. 用户的新习惯或偏好变更。\n"
+                    "2. 重要的项目决策或里程碑进展。\n"
+                    "3. 用户提到的重要个人事实。\n\n"
+                    "请以 Markdown 列表格式输出提炼结果，保持简洁。如果没有值得记录的长期价值，请回复“无重要更新”。"
+                )
+                
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": distill_prompt}]
+                )
+                summary = response.choices[0].message.content.strip()
+                
+                if summary and "无重要更新" not in summary:
+                    # 写入长期记忆
+                    with open(self.memory_path, 'a', encoding='utf-8') as f:
+                        f.write(f"\n\n### 自动提炼记忆 ({datetime.now().strftime('%Y-%m-%d')})\n{summary}\n")
+                    print("[系统]: 长期记忆已更新。")
+                
+                # 更新短期记忆文件（移除过期日期）
+                remaining_content = lines[0:2] # 保持标题和描述
+                for d in sorted_dates:
+                    if d not in to_prune:
+                        remaining_content.extend(sections[d])
+                
+                with open(self.stm_path, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(remaining_content))
+                print(f"[系统]: 已清理过期短期记忆。")
+
+        except Exception as e:
+            print(f"记忆管理过程中出错: {e}")
 
     def _load_file_content(self, path, default_msg):
         try:

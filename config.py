@@ -29,5 +29,8 @@ MEMORY_FILE_PATH = "memory/alice_memory.md"
 # 任务清单路径
 TODO_FILE_PATH = "memory/todo.md"
 
+# 短期记忆路径
+SHORT_TERM_MEMORY_FILE_PATH = "memory/short_term_memory.md"
+
 # 输出目录
 ALICE_OUTPUT_DIR = "alice_output"
