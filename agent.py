@@ -1,5 +1,6 @@
 import re
 import subprocess
+import os
 from openai import OpenAI
 import config
 
@@ -7,12 +8,25 @@ class AliceAgent:
     def __init__(self, model_name=None, prompt_path=None):
         self.model_name = model_name or config.MODEL_NAME
         self.prompt_path = prompt_path or config.DEFAULT_PROMPT_PATH
+        self.memory_path = config.MEMORY_FILE_PATH
         self.client = OpenAI(
             base_url=config.BASE_URL,
             api_key=config.API_KEY
         )
+        self.messages = []
+        self._refresh_system_message()
+
+    def _refresh_system_message(self):
+        """刷新系统消息，注入最新的提示词和长期记忆"""
         self.system_prompt = self._load_prompt()
-        self.messages = [{"role": "system", "content": self.system_prompt}]
+        self.memory_content = self._load_memory()
+        
+        full_system_content = f"{self.system_prompt}\n\n### 你的长期记忆 (来自 {self.memory_path})\n{self.memory_content}"
+        
+        if self.messages:
+            self.messages[0] = {"role": "system", "content": full_system_content}
+        else:
+            self.messages = [{"role": "system", "content": full_system_content}]
 
     def _load_prompt(self):
         try:
@@ -21,6 +35,17 @@ class AliceAgent:
         except Exception as e:
             print(f"加载提示词失败: {e}")
             return "你是一个 AI 助手。"
+
+    def _load_memory(self):
+        """加载长期记忆"""
+        try:
+            if os.path.exists(self.memory_path):
+                with open(self.memory_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            return "暂无记忆。"
+        except Exception as e:
+            print(f"加载记忆失败: {e}")
+            return "暂无记忆。"
 
     def execute_command(self, command):
         """执行 shell 命令并返回输出"""
@@ -89,8 +114,18 @@ class AliceAgent:
             for cmd in commands:
                 res = self.execute_command(cmd.strip())
                 results.append(f"命令 `{cmd.strip()}` 的结果:\n{res}")
+                
+                # 如果涉及了 memory 文件的修改，标记需要刷新
+                if config.MEMORY_FILE_PATH in cmd:
+                    print("[系统]: 检测到记忆文件修改。")
             
             # 反馈结果
             feedback = "\n\n".join(results)
             self.messages.append({"role": "user", "content": f"系统执行反馈：\n{feedback}"})
+            
+            # 刷新系统消息以包含最新记忆
+            if any(config.MEMORY_FILE_PATH in cmd for cmd in commands):
+                self._refresh_system_message()
+                print("[系统]: 长期记忆已更新并重新注入上下文。")
+                
             print(f"\n{'-'*40}\n结果已反馈给 Alice，继续生成中...")

@@ -1,4 +1,3 @@
-template
 .env
 __pycache__/
 *.py[cod]
