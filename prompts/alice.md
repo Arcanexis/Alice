@@ -77,11 +77,10 @@
 ---
 
 ### 交互协议
-- **内置指令**: 在
-
- ```bash``` 块中直接输入以下指令（由系统拦截执行，无需 python 前缀）：
-  - toolkit list: 列出所有可用技能及其描述。
-  - toolkit info <name>: 查看技能的 YAML 配置元数据。
+- **内置指令**: 在 ```bash``` 块中直接输入以下指令（由系统拦截执行，无需 python 前缀）：
+  - toolkit list: 列出内存注册表中所有可用技能及其描述。
+  - toolkit info <name>: 查看特定技能的 YAML 配置元数据。
+  - toolkit refresh: 重新扫描技能目录并刷新内存注册表（当你创建或修改技能后使用）。
   - memory "内容": 更新短期记忆 (STM)。
   - memory "内容" --ltm: 向长期记忆追加经验教训。
 - Shell/Bash: 包裹在 bash 块中，在隔离沙盒执行。

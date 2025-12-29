@@ -1,6 +1,5 @@
 import os
 import time
-
 import re
 
 class SnapshotManager:
@@ -14,6 +13,7 @@ class SnapshotManager:
             "skills"
         ]
         self.snapshots = {}
+        self.skills = {} # 技能注册表
         self.refresh()
 
     def _get_summary(self, path):
@@ -31,13 +31,26 @@ class SnapshotManager:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 
-                # 针对 SKILL.md 提取 description
+                # 针对 SKILL.md 提取 description 并注册技能
                 if path.endswith("SKILL.md"):
-                    desc_match = re.search(r'description:\s*(.*)', content)
-                    if desc_match:
-                        summary += f" 功能: {desc_match.group(1).strip()}"
-                    else:
-                        summary += " (未定义描述)"
+                    # 提取 YAML 块
+                    yaml_match = re.match(r'^---\n(.*?)\n---\n', content, re.DOTALL)
+                    yaml_content = yaml_match.group(1) if yaml_match else ""
+                    
+                    # 解析 description 用于快照
+                    desc_match = re.search(r'description:\s*(.*)', yaml_content) if yaml_content else re.search(r'description:\s*(.*)', content)
+                    desc = desc_match.group(1).strip() if desc_match else "无描述"
+                    
+                    summary += f" 功能: {desc}"
+                    
+                    # 注册到技能表 (使用目录名作为 key)
+                    skill_name = os.path.basename(os.path.dirname(path))
+                    self.skills[skill_name] = {
+                        "name": skill_name,
+                        "description": desc,
+                        "yaml": yaml_content,
+                        "path": path
+                    }
                 else:
                     lines = content.splitlines()[:2]
                     first_content = " | ".join([l.strip() for l in lines if l.strip()])
@@ -52,19 +65,22 @@ class SnapshotManager:
             return f"[路径: {path}, 状态: 无法读取 ({str(e)})]"
 
     def refresh(self):
-        """刷新所有快照"""
+        """刷新所有快照和技能注册表"""
         new_snapshots = {}
+        self.skills = {} # 重置注册表
         for path in self.core_paths:
             if os.path.isfile(path):
                 new_snapshots[path] = self._get_summary(path)
             elif os.path.isdir(path):
                 # 记录目录快照，并深入一层记录关键技能
                 new_snapshots[path] = self._get_summary(path)
-                for item in os.listdir(path):
-                    item_path = os.path.join(path, item)
-                    skill_md = os.path.join(item_path, "SKILL.md")
-                    if os.path.exists(skill_md):
-                        new_snapshots[skill_md] = self._get_summary(skill_md)
+                if os.path.exists(path):
+                    for item in sorted(os.listdir(path)):
+                        item_path = os.path.join(path, item)
+                        if os.path.isdir(item_path):
+                            skill_md = os.path.join(item_path, "SKILL.md")
+                            if os.path.exists(skill_md):
+                                new_snapshots[skill_md] = self._get_summary(skill_md)
         self.snapshots = new_snapshots
 
     def get_index_text(self):

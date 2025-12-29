@@ -166,60 +166,35 @@ class AliceAgent:
             print(f"加载文件 {path} 失败: {e}")
             return default_msg
 
-    def _parse_skill_md(self, path):
-        """解析 SKILL.md 中的 YAML 元数据和正文"""
-        if not os.path.exists(path):
-            return None, None
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            match = re.match(r'^---\n(.*?)\n---\n(.*)', content, re.DOTALL)
-            if match:
-                yaml_part = match.group(1)
-                body_part = match.group(2)
-                # 极简解析 YAML
-                metadata = {}
-                for line in yaml_part.split('\n'):
-                    if ':' in line:
-                        k, v = line.split(':', 1)
-                        metadata[k.strip()] = v.strip()
-                return metadata, body_part
-            return {}, content
-        except Exception:
-            return {}, ""
-
     def handle_toolkit(self, args):
-        """处理内置 toolkit 指令"""
+        """处理内置 toolkit 指令（基于注册机制）"""
         if not args or args[0] == "list":
-            skills_dir = os.path.join(self.project_root, "skills")
-            if not os.path.exists(skills_dir):
-                return "未找到 skills 目录。"
+            skills = self.snapshot_mgr.skills
+            if not skills:
+                return "当前未注册任何技能。请确保 `skills/` 目录下有正确的 `SKILL.md` 文件。"
             
             skill_list = []
-            for item in sorted(os.listdir(skills_dir)):
-                skill_path = os.path.join(skills_dir, item)
-                if os.path.isdir(skill_path):
-                    skill_md = os.path.join(skill_path, "SKILL.md")
-                    meta, _ = self._parse_skill_md(skill_md)
-                    desc = meta.get("description", "无描述") if meta else "未找到 SKILL.md"
-                    skill_list.append(f"- **{item}**: {desc}")
-            return "### 可用技能列表\n" + "\n".join(skill_list)
+            for name, data in sorted(skills.items()):
+                skill_list.append(f"- **{name}**: {data['description']}")
+            return "### 可用技能列表 (内存注册表)\n" + "\n".join(skill_list)
 
         elif args[0] == "info" and len(args) > 1:
             skill_name = args[1]
-            skill_md = os.path.join(self.project_root, "skills", skill_name, "SKILL.md")
-            if not os.path.exists(skill_md):
-                return f"未找到技能 '{skill_name}' 的说明文档。"
+            skill = self.snapshot_mgr.skills.get(skill_name)
+            if not skill:
+                return f"技能 '{skill_name}' 未在注册表中。请尝试执行 `toolkit refresh`。"
             
-            with open(skill_md, 'r', encoding='utf-8') as f:
-                content = f.read()
-            # 仅返回 YAML 部分以节省上下文
-            match = re.match(r'^(---\n.*?\n---\n)', content, re.DOTALL)
-            if match:
-                return f"### 技能 '{skill_name}' 配置信息\n```yaml\n{match.group(1).strip()}\n```\n*(提示: 如需完整用法，请直接查看 {skill_md})*"
-            return f"技能 '{skill_name}' 的文档格式不规范，无法提取元数据。"
+            yaml_content = skill.get("yaml", "").strip()
+            if yaml_content:
+                return f"### 技能 '{skill_name}' 配置信息 (内存注册表)\n```yaml\n---\n{yaml_content}\n---\n```\n*(提示: 如需完整用法，请直接查看 {skill['path']})*"
+            return f"技能 '{skill_name}' 注册信息不完整，缺少元数据。"
+        
+        elif args[0] == "refresh":
+            self.snapshot_mgr.refresh()
+            count = len(self.snapshot_mgr.skills)
+            return f"技能注册表已刷新，共发现并注册 {count} 个技能。"
             
-        return "未知 toolkit 指令。用法: `toolkit list` 或 `toolkit info <skill_name>`"
+        return "未知 toolkit 指令。用法: `toolkit list`, `toolkit info <skill_name>`, `toolkit refresh`"
 
     def handle_memory(self, content, target="stm"):
         """处理内置 memory 指令"""
