@@ -82,7 +82,12 @@ function App() {
     setInput('');
     setIsLoading(true);
 
-    let currentBotMessage = { role: 'bot', thinking: '', content: '', executionResults: [] };
+    let currentBotMessage = { 
+        role: 'bot', 
+        steps: [], 
+        finalAnswer: '', 
+        isComplete: false 
+    };
     setMessages((prev) => [...prev, currentBotMessage]);
 
     try {
@@ -94,6 +99,7 @@ function App() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let currentStep = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -106,12 +112,27 @@ function App() {
           if (!line.trim()) continue;
           try {
             const data = JSON.parse(line);
-            if (data.type === 'thinking') {
-              currentBotMessage.thinking += data.delta;
-            } else if (data.type === 'content') {
-              currentBotMessage.content += data.delta;
-            } else if (data.type === 'execution_result') {
-                currentBotMessage.executionResults.push(data.content);
+            
+            if (data.type === 'start_step') {
+                currentStep = {
+                    id: data.step,
+                    thinking: '',
+                    content: '',
+                    executionResults: [],
+                    systemLogs: []
+                };
+                currentBotMessage.steps.push(currentStep);
+            } else if (data.type === 'thinking' && currentStep) {
+                currentStep.thinking += data.delta;
+            } else if (data.type === 'content' && currentStep) {
+                currentStep.content += data.delta;
+            } else if (data.type === 'system' && currentStep) {
+                currentStep.systemLogs.push(data.content);
+            } else if (data.type === 'execution_result' && currentStep) {
+                currentStep.executionResults.push(data.content);
+            } else if (data.type === 'final_answer') {
+                currentBotMessage.finalAnswer = data.content;
+                currentBotMessage.isComplete = true;
             }
 
             setMessages((prev) => {
@@ -222,7 +243,7 @@ function App() {
           )}
           {messages.map((msg, i) => (
             <div key={i} className={cn("flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300", msg.role === 'user' ? "justify-end" : "justify-start")}>
-              <div className={cn("max-w-[85%] flex gap-4", msg.role === 'user' ? "flex-row-reverse" : "flex-row")}>
+              <div className={cn("max-w-[90%] flex gap-4", msg.role === 'user' ? "flex-row-reverse" : "flex-row")}>
                 <div className={cn(
                   "w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 shadow-md",
                   msg.role === 'user' ? "bg-gray-800 text-indigo-400 border border-indigo-900/50" : "bg-indigo-600 text-white"
@@ -230,73 +251,101 @@ function App() {
                   {msg.role === 'user' ? <User size={20} /> : <Bot size={20} />}
                 </div>
                 
-                <div className="space-y-3">
-                  {msg.role === 'bot' && msg.thinking && (
-                    <details className="group bg-gray-900/80 backdrop-blur-sm rounded-xl border border-gray-800 overflow-hidden transition-all">
-                      <summary className="px-3 py-1.5 text-[11px] text-gray-400 cursor-pointer hover:bg-gray-800 flex items-center justify-between select-none">
-                        <div className="flex items-center gap-2">
-                          <Terminal size={12} className="animate-pulse text-indigo-400" />
-                          <span className="font-semibold uppercase tracking-tight">思考过程 (Reasoning)</span>
-                        </div>
-                        <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
-                      </summary>
-                      <div className="px-4 py-3 text-xs text-gray-400 italic border-t border-gray-800 bg-black/20 whitespace-pre-wrap font-mono leading-relaxed">
-                        {msg.thinking}
-                      </div>
-                    </details>
-                  )}
-
-                  <div className={cn(
-                    "rounded-2xl px-5 py-3 shadow-sm leading-relaxed",
-                    msg.role === 'user' ? "bg-gray-800 text-gray-100 border border-gray-700" : "bg-gray-900 text-gray-200 border border-gray-800"
-                  )}>
-                    <ReactMarkdown 
-                      className="prose prose-sm max-w-none prose-invert prose-headings:font-bold prose-a:text-indigo-400 prose-pre:p-0 prose-pre:bg-transparent prose-pre:m-0"
-                      components={{
-                        code: ({ node, inline, className, children, ...props }) => {
-                          return inline ? (
-                            <code className={cn("bg-gray-800 text-pink-400 px-1.5 py-0.5 rounded font-mono text-[0.85em] font-medium", className)} {...props}>
-                              {children}
-                            </code>
-                          ) : (
-                            <CodeBlock className={className}>{children}</CodeBlock>
-                          );
-                        }
-                      }}
-                    >
+                <div className="space-y-4 flex-1 overflow-hidden">
+                  {msg.role === 'user' ? (
+                    <div className="bg-gray-800 text-gray-100 px-5 py-3 rounded-2xl border border-gray-700 shadow-sm leading-relaxed whitespace-pre-wrap">
                       {msg.content}
-                    </ReactMarkdown>
-                  </div>
-
-                  {msg.role === 'bot' && msg.executionResults && msg.executionResults.length > 0 && (
-                    <details className="group bg-black rounded-xl overflow-hidden mt-3 shadow-none border border-gray-800">
-                      <summary className="px-3 py-2 text-[11px] text-gray-400 cursor-pointer hover:bg-gray-900 flex items-center justify-between select-none font-mono">
-                        <div className="flex items-center gap-2">
-                          <Terminal size={12} />
-                          <span>沙盒执行反馈 ({msg.executionResults.length})</span>
-                          <span className="flex items-center gap-1 ml-2 text-[9px] px-1.5 rounded bg-gray-900 border border-gray-800">
-                            {msg.executionResults.some(r => r.includes('执行失败')) ? 
-                                <><AlertCircle size={10} className="text-red-500" /> <span className="text-red-400">异常终止</span></> : 
-                                <><CheckCircle2 size={10} className="text-green-500" /> <span className="text-green-400">流水线就绪</span></>
-                            }
-                          </span>
-                        </div>
-                        <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
-                      </summary>
-                      <div className="space-y-3 p-3 border-t border-gray-800 max-h-80 overflow-y-auto bg-black/40">
-                        {msg.executionResults.map((res, idx) => (
-                          <div key={idx} className="text-[10px] text-green-400 font-mono overflow-x-auto whitespace-pre-wrap pb-3 border-b border-gray-800 last:border-0 last:pb-0">
-                            <div className="text-gray-500 mb-1 flex justify-between">
-                                <span># LOG_BLOCK_{idx + 1}</span>
-                                <span className={res.includes('执行失败') ? "text-red-500" : "text-gray-600"}>
-                                    {res.includes('执行失败') ? "[ERR_STATUS]" : "[OK_STATUS]"}
-                                </span>
+                    </div>
+                  ) : (
+                    <>
+                      {/* 任务追踪时间线 (Steps Trace) */}
+                      {msg.steps && msg.steps.length > 0 && (
+                        <div className="space-y-2">
+                          {msg.steps.map((step, idx) => (
+                            <div key={idx} className="group/step">
+                                <details className="bg-gray-900/40 rounded-xl border border-gray-800/50 overflow-hidden transition-all" open={!msg.isComplete && idx === msg.steps.length - 1}>
+                                    <summary className="px-3 py-2 text-[11px] text-gray-500 cursor-pointer hover:bg-gray-800/50 flex items-center justify-between select-none font-mono">
+                                        <div className="flex items-center gap-3">
+                                            <div className={cn(
+                                                "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold",
+                                                step.executionResults.length > 0 ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "bg-gray-800 text-gray-500"
+                                            )}>
+                                                {step.id}
+                                            </div>
+                                            <span className="uppercase tracking-widest font-bold opacity-70">
+                                                {step.executionResults.length > 0 ? "执行与观测 (Action & Observe)" : "思考与规划 (Reasoning)"}
+                                            </span>
+                                            {step.systemLogs.length > 0 && (
+                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/20 text-indigo-400 border border-indigo-900/30 animate-pulse">
+                                                    {step.systemLogs[step.systemLogs.length - 1]}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <ChevronDown size={14} className="opacity-0 group-hover/step:opacity-100 transition-opacity" />
+                                    </summary>
+                                    <div className="p-4 bg-black/20 space-y-3 border-t border-gray-800/50">
+                                        {step.thinking && (
+                                            <div className="text-xs text-gray-400 italic font-mono leading-relaxed bg-gray-950/50 p-3 rounded-lg border border-gray-800">
+                                                <div className="text-[9px] text-indigo-500 mb-1 font-bold"># THOUGHT_PROCESS</div>
+                                                {step.thinking}
+                                            </div>
+                                        )}
+                                        {step.content && (
+                                            <div className="text-xs text-gray-300 bg-gray-900/50 p-3 rounded-lg border border-gray-800">
+                                                <div className="text-[9px] text-emerald-500 mb-1 font-bold"># INTENT</div>
+                                                <ReactMarkdown className="prose prose-invert prose-xs max-w-none">{step.content}</ReactMarkdown>
+                                            </div>
+                                        )}
+                                        {step.executionResults.length > 0 && (
+                                            <div className="space-y-2">
+                                                {step.executionResults.map((res, ridx) => (
+                                                    <div key={ridx} className="bg-black/60 rounded-lg p-3 border border-gray-800 font-mono text-[10px]">
+                                                        <div className="flex items-center justify-between mb-2 text-gray-500">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <Terminal size={12} />
+                                                                <span>EXEC_RESULT_{ridx + 1}</span>
+                                                            </div>
+                                                            <span className={res.includes('执行失败') ? "text-red-500" : "text-green-500"}>
+                                                                {res.includes('执行失败') ? "FAIL" : "SUCCESS"}
+                                                            </span>
+                                                        </div>
+                                                        <pre className="text-green-400/90 overflow-x-auto whitespace-pre-wrap">{res}</pre>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </details>
                             </div>
-                            {res}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 最终回答 (Final Answer) */}
+                      {(msg.finalAnswer || (!msg.steps && msg.content)) && (
+                        <div className={cn(
+                            "rounded-2xl px-5 py-4 shadow-xl leading-relaxed border animate-in fade-in zoom-in-95 duration-500",
+                            "bg-gray-900 text-gray-100 border-gray-800"
+                        )}>
+                            <ReactMarkdown 
+                            className="prose prose-sm max-w-none prose-invert prose-headings:font-bold prose-a:text-indigo-400 prose-pre:p-0 prose-pre:bg-transparent prose-pre:m-0"
+                            components={{
+                                code: ({ node, inline, className, children, ...props }) => {
+                                return inline ? (
+                                    <code className={cn("bg-gray-800 text-pink-400 px-1.5 py-0.5 rounded font-mono text-[0.85em] font-medium", className)} {...props}>
+                                    {children}
+                                    </code>
+                                ) : (
+                                    <CodeBlock className={className}>{children}</CodeBlock>
+                                );
+                                }
+                            }}
+                            >
+                            {msg.finalAnswer || msg.content}
+                            </ReactMarkdown>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

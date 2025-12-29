@@ -471,8 +471,12 @@ class AliceAgent:
     def stream_chat(self, user_input):
         """流式对话生成器，支持 UI 实时展示，并在控制台同步打印日志"""
         self.messages.append({"role": "user", "content": user_input})
+        step_count = 0
         
         while True:
+            step_count += 1
+            yield {"type": "start_step", "step": step_count}
+            
             extra_body = {"enable_thinking": True}
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -485,7 +489,7 @@ class AliceAgent:
             thinking_content = ""
             done_thinking = False
             
-            print(f"\n{'='*20} Alice 正在思考 (API 模式: {self.model_name}) {'='*20}")
+            print(f"\n{'='*20} Alice 正在思考 (API 模式: {self.model_name}, 步骤: {step_count}) {'='*20}")
             
             for chunk in response:
                 if chunk.choices:
@@ -511,6 +515,7 @@ class AliceAgent:
             
             if not python_codes and not bash_commands:
                 self.messages.append({"role": "assistant", "content": full_content})
+                yield {"type": "final_answer", "content": full_content}
                 break
                 
             self.messages.append({"role": "assistant", "content": full_content})
