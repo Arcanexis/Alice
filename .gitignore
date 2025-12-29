@@ -7,4 +7,8 @@ alice_output/
 alice-ui/node_modules/
 alice-ui/dist/
 alice-ui/.vite/
+
 .clinerules
+
+memory/*.json
+
