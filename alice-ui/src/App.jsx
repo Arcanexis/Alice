@@ -170,10 +170,10 @@ function App() {
                       <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 group-hover:bg-indigo-900/30 group-hover:text-indigo-400 transition-colors shrink-0">
                         <FileText size={16} />
                       </div>
-                      <div className="flex flex-col overflow-hidden">
+                      <a href={file.url} target="_blank" rel="noreferrer" className="flex flex-col overflow-hidden hover:opacity-80 transition-opacity">
                         <span className="text-xs text-gray-200 truncate font-semibold">{file.name}</span>
                         <span className="text-[10px] text-gray-500">{(file.size / 1024).toFixed(1)} KB</span>
-                      </div>
+                      </a>
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <a href={file.url} target="_blank" rel="noreferrer" className="p-1.5 text-gray-500 hover:text-indigo-400 hover:bg-gray-700 rounded-md shadow-sm border border-transparent" title="预览">
