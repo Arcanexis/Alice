@@ -1,7 +1,7 @@
 # Alice Agent 全能沙盒镜像
 # 这是一个为 Alice 设计的高权限、全功能 Linux 运行环境
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # 避免交互式提示
 ENV DEBIAN_FRONTEND=noninteractive
@@ -33,15 +33,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && npm install -g npm@latest \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. 配置 Python 别名与基础库
-RUN ln -s /usr/bin/python3 /usr/bin/python \
-    && pip install --no-cache-dir --upgrade pip setuptools wheel
+# 3. 建立容器内 Python 虚拟环境 (解决包冲突的关键)
+ENV VIRTUAL_ENV=/opt/alice_env
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# 4. 迁移项目核心 Python 依赖
+# 4. 在虚拟环境中安装/升级 Python 基础库
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# 5. 迁移项目核心 Python 依赖
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
-# 5. 环境变量配置
+# 6. 环境变量配置
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PYTHONUNBUFFERED=1
