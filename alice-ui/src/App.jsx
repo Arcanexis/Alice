@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Send, Bot, User, ChevronDown, ChevronUp, ScrollText, Library, Terminal, FileText, Download, ExternalLink, Code2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Send, Bot, User, ChevronDown, ChevronUp, ScrollText, Library, Terminal, FileText, Download, ExternalLink, Code2, AlertCircle, CheckCircle2, FolderOpen, Folder } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -9,7 +9,7 @@ function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
 
-// 自定义代码块组件，实现折叠功能 (始终保持深色)
+// 自定义代码块组件
 const CodeBlock = ({ children, className }) => {
   const [isOpen, setIsOpen] = useState(false);
   const lang = className ? className.replace('language-', '') : 'code';
@@ -35,6 +35,99 @@ const CodeBlock = ({ children, className }) => {
   );
 };
 
+// 递归文件项组件
+const FileTreeItem = ({ item, depth = 0 }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const isDir = item.type === 'directory';
+
+  return (
+    <div className="flex flex-col">
+      <div 
+        className={cn(
+          "flex items-center justify-between p-1.5 hover:bg-gray-800/50 rounded-lg group transition-colors cursor-pointer",
+          depth > 0 && "ml-3 border-l border-gray-800 pl-2"
+        )}
+        onClick={() => isDir && setIsOpen(!isOpen)}
+      >
+        <div className="flex items-center gap-2 overflow-hidden flex-1">
+          <div className={cn(
+            "w-6 h-6 rounded flex items-center justify-center shrink-0",
+            isDir ? "text-amber-500" : "text-gray-500"
+          )}>
+            {isDir ? (isOpen ? <FolderOpen size={14} /> : <Folder size={14} />) : <FileText size={14} />}
+          </div>
+          <div className="flex flex-col overflow-hidden">
+            <span className={cn(
+              "text-xs truncate font-medium",
+              isDir ? "text-amber-100" : "text-gray-200"
+            )} title={item.name}>{item.name}</span>
+            {!isDir && (
+              <span className="text-[9px] text-gray-500">{(item.size / 1024).toFixed(1)} KB</span>
+            )}
+            {isDir && item.hasIndex && (
+               <span className="text-[9px] text-emerald-500 font-medium">网页报告</span>
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+          {isDir && item.hasIndex && (
+            <a 
+              href={item.indexUrl} 
+              target="_blank" 
+              rel="noreferrer" 
+              className="p-1 text-emerald-500 hover:bg-emerald-500/20 rounded" 
+              title="预览报告"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink size={12} />
+            </a>
+          )}
+          {!isDir ? (
+            <>
+              <a 
+                href={item.url} 
+                target="_blank" 
+                rel="noreferrer" 
+                className="p-1 text-indigo-400 hover:bg-indigo-400/20 rounded" 
+                title="打开"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink size={12} />
+              </a>
+              <a 
+                href={item.url} 
+                download 
+                className="p-1 text-gray-400 hover:bg-gray-400/20 rounded" 
+                title="下载"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Download size={12} />
+              </a>
+            </>
+          ) : (
+             <div className="text-gray-600">
+               {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+             </div>
+          )}
+        </div>
+      </div>
+      
+      {isDir && isOpen && item.children && (
+        <div className="flex flex-col mt-0.5">
+          {item.children.length > 0 ? (
+            item.children.map((child, idx) => (
+              <FileTreeItem key={idx} item={child} depth={depth + 1} />
+            ))
+          ) : (
+            <div className="ml-8 text-[10px] text-gray-600 py-1 italic">空目录</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -50,12 +143,10 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: instant ? 'auto' : 'smooth' });
   };
 
-  // 监听消息变化，确保滚动到底部
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // 处理输入框高度自适应或窗口变化时的滚动
   useEffect(() => {
     const handleResize = () => scrollToBottom(true);
     window.addEventListener('resize', handleResize);
@@ -65,7 +156,7 @@ function App() {
   useEffect(() => {
     fetchHistory();
     fetchStatus();
-    const timer = setInterval(fetchStatus, 5000); // 每 5 秒轮询一次状态
+    const timer = setInterval(fetchStatus, 5000);
     return () => clearInterval(timer);
   }, []);
 
@@ -104,12 +195,7 @@ function App() {
     setInput('');
     setIsLoading(true);
 
-    let currentBotMessage = { 
-        role: 'bot', 
-        steps: [], 
-        finalAnswer: '', 
-        isComplete: false 
-    };
+    let currentBotMessage = { role: 'bot', steps: [], finalAnswer: '', isComplete: false };
     setMessages((prev) => [...prev, currentBotMessage]);
 
     try {
@@ -134,15 +220,8 @@ function App() {
           if (!line.trim()) continue;
           try {
             const data = JSON.parse(line);
-            
             if (data.type === 'start_step') {
-                currentStep = {
-                    id: data.step,
-                    thinking: '',
-                    content: '',
-                    executionResults: [],
-                    systemLogs: []
-                };
+                currentStep = { id: data.step, thinking: '', content: '', executionResults: [], systemLogs: [] };
                 currentBotMessage.steps.push(currentStep);
             } else if (data.type === 'thinking' && currentStep) {
                 currentStep.thinking += data.delta;
@@ -177,7 +256,6 @@ function App() {
 
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100 overflow-hidden font-sans selection:bg-indigo-500/30">
-      {/* Sidebar */}
       <div className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col hidden lg:flex shadow-2xl z-10">
         <div className="p-6 border-b border-gray-800 flex items-center gap-3">
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-900/20">
@@ -189,7 +267,7 @@ function App() {
           </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-4 space-y-8 scrollbar-thin scrollbar-thumb-gray-800">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-thin scrollbar-thumb-gray-800">
           <section>
             <div className="flex items-center gap-2 mb-3 text-gray-100 font-bold px-2 text-sm uppercase tracking-wider">
               <ScrollText size={16} className="text-indigo-400" />
@@ -212,28 +290,10 @@ function App() {
               {isOutputsOpen ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
             </button>
             {isOutputsOpen && (
-              <div className="space-y-1 px-1 animate-in fade-in slide-in-from-top-1 duration-200">
+              <div className="space-y-0.5 px-1 animate-in fade-in slide-in-from-top-1 duration-200">
                 {outputs.length > 0 ? (
-                  outputs.map(file => (
-                    <div key={file.name} className="flex items-center justify-between p-2.5 hover:bg-gray-800 rounded-xl group transition-colors">
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 group-hover:bg-indigo-900/30 group-hover:text-indigo-400 transition-colors shrink-0">
-                          <FileText size={16} />
-                        </div>
-                        <a href={file.url} target="_blank" rel="noreferrer" className="flex flex-col overflow-hidden hover:opacity-80 transition-opacity">
-                          <span className="text-xs text-gray-200 truncate font-semibold">{file.name}</span>
-                          <span className="text-[10px] text-gray-500">{(file.size / 1024).toFixed(1)} KB</span>
-                        </a>
-                      </div>
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <a href={file.url} target="_blank" rel="noreferrer" className="p-1.5 text-gray-500 hover:text-indigo-400 hover:bg-gray-700 rounded-md shadow-sm border border-transparent" title="预览">
-                          <ExternalLink size={14} />
-                        </a>
-                        <a href={file.url} download className="p-1.5 text-gray-500 hover:text-indigo-400 hover:bg-gray-700 rounded-md shadow-sm border border-transparent" title="下载">
-                          <Download size={14} />
-                        </a>
-                      </div>
-                    </div>
+                  outputs.map((item, idx) => (
+                    <FileTreeItem key={idx} item={item} />
                   ))
                 ) : (
                   <div className="text-xs text-gray-500 text-center py-4 italic bg-gray-800/50 rounded-xl border border-dashed border-gray-700">
@@ -269,9 +329,7 @@ function App() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col relative z-0">
-        {/* Chat Area */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-gray-950">
           {messages.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-4">
@@ -288,7 +346,6 @@ function App() {
                 )}>
                   {msg.role === 'user' ? <User size={20} /> : <Bot size={20} />}
                 </div>
-                
                 <div className="space-y-4 flex-1 min-w-0">
                   {msg.role === 'user' ? (
                     <div className="bg-gray-800 text-gray-100 px-5 py-3 rounded-2xl border border-gray-700 shadow-sm leading-relaxed whitespace-pre-wrap break-words overflow-hidden">
@@ -296,7 +353,6 @@ function App() {
                     </div>
                   ) : (
                     <>
-                      {/* 任务追踪时间线 (Steps Trace) */}
                       {msg.steps && msg.steps.length > 0 && (
                         <div className="space-y-2 min-w-0">
                           {msg.steps.map((step, idx) => (
@@ -311,13 +367,8 @@ function App() {
                                                 {step.id}
                                             </div>
                                             <span className="uppercase tracking-widest font-bold opacity-70">
-                                                {step.executionResults.length > 0 ? "执行与观测 (Action & Observe)" : "思考与规划 (Reasoning)"}
+                                                {step.executionResults.length > 0 ? "执行与观测" : "思考与规划"}
                                             </span>
-                                            {step.systemLogs.length > 0 && (
-                                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/20 text-indigo-400 border border-indigo-900/30 animate-pulse">
-                                                    {step.systemLogs[step.systemLogs.length - 1]}
-                                                </span>
-                                            )}
                                         </div>
                                         <ChevronDown size={14} className="opacity-0 group-hover/step:opacity-100 transition-opacity" />
                                     </summary>
@@ -329,7 +380,7 @@ function App() {
                                             </div>
                                         )}
                                         {step.content && (
-                                            <div className="text-xs text-gray-300 bg-gray-900/50 p-3 rounded-lg border border-gray-800 break-words overflow-hidden">
+                                            <div className="text-xs text-gray-300 bg-gray-900/50 p-3 rounded-lg border border-gray-800 break-words overflow-hidden text-wrap">
                                                 <div className="text-[9px] text-emerald-500 mb-1 font-bold"># INTENT</div>
                                                 <ReactMarkdown className="prose prose-invert prose-xs max-w-none break-words">{step.content}</ReactMarkdown>
                                             </div>
@@ -339,13 +390,8 @@ function App() {
                                                 {step.executionResults.map((res, ridx) => (
                                                     <div key={ridx} className="bg-black/60 rounded-lg p-3 border border-gray-800 font-mono text-[10px]">
                                                         <div className="flex items-center justify-between mb-2 text-gray-500">
-                                                            <div className="flex items-center gap-1.5">
-                                                                <Terminal size={12} />
-                                                                <span>EXEC_RESULT_{ridx + 1}</span>
-                                                            </div>
-                                                            <span className={res.includes('执行失败') ? "text-red-500" : "text-green-500"}>
-                                                                {res.includes('执行失败') ? "FAIL" : "SUCCESS"}
-                                                            </span>
+                                                            <div className="flex items-center gap-1.5"><Terminal size={12} /><span>EXEC_RESULT_{ridx + 1}</span></div>
+                                                            <span className={res.includes('执行失败') ? "text-red-500" : "text-green-500"}>{res.includes('执行失败') ? "FAIL" : "SUCCESS"}</span>
                                                         </div>
                                                         <pre className="text-green-400/90 overflow-x-auto whitespace-pre-wrap">{res}</pre>
                                                     </div>
@@ -358,8 +404,6 @@ function App() {
                           ))}
                         </div>
                       )}
-
-                      {/* 最终回答 (Final Answer) */}
                       {(msg.finalAnswer || (!msg.steps && msg.content)) && (
                         <div className={cn(
                             "rounded-2xl px-5 py-4 shadow-xl leading-relaxed border animate-in fade-in zoom-in-95 duration-500 overflow-hidden min-w-0",
@@ -370,9 +414,7 @@ function App() {
                             components={{
                                 code: ({ node, inline, className, children, ...props }) => {
                                 return inline ? (
-                                    <code className={cn("bg-gray-800 text-pink-400 px-1.5 py-0.5 rounded font-mono text-[0.85em] font-medium", className)} {...props}>
-                                    {children}
-                                    </code>
+                                    <code className={cn("bg-gray-800 text-pink-400 px-1.5 py-0.5 rounded font-mono text-[0.85em] font-medium", className)} {...props}>{children}</code>
                                 ) : (
                                     <CodeBlock className={className}>{children}</CodeBlock>
                                 );
@@ -391,8 +433,6 @@ function App() {
           ))}
           <div ref={chatEndRef} />
         </div>
-
-        {/* Input Area */}
         <div className="p-6 bg-gray-950/80 backdrop-blur-md border-t border-gray-800">
           <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
             <input
@@ -411,16 +451,6 @@ function App() {
               <Send size={20} />
             </button>
           </form>
-          <div className="flex justify-center gap-6 mt-4 opacity-50">
-              <div className="flex items-center gap-1.5 text-[10px] text-gray-600">
-                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                  容器沙盒已挂载
-              </div>
-              <div className="flex items-center gap-1.5 text-[10px] text-gray-600 border-l border-gray-800 pl-6">
-                  <div className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
-                  分级记忆库同步中
-              </div>
-          </div>
         </div>
       </div>
     </div>

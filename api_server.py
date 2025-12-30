@@ -123,20 +123,56 @@ async def get_skills():
     alice.snapshot_mgr.refresh()
     return {"skills": alice.snapshot_mgr.skills}
 
+def get_directory_tree(path, base_url):
+    """递归构建目录树"""
+    tree = []
+    try:
+        items = os.listdir(path)
+        # 排序：目录在前，文件在后，同类按修改时间排序
+        items_with_meta = []
+        for f in items:
+            full_path = os.path.join(path, f)
+            items_with_meta.append({
+                "name": f,
+                "is_dir": os.path.isdir(full_path),
+                "mtime": os.path.getmtime(full_path)
+            })
+        
+        items_with_meta.sort(key=lambda x: (not x["is_dir"], -x["mtime"]))
+        
+        for item in items_with_meta:
+            name = item["name"]
+            full_path = os.path.join(path, name)
+            rel_path = os.path.relpath(full_path, config.ALICE_OUTPUT_DIR)
+            url = f"{base_url}/{rel_path.replace(os.sep, '/')}"
+            
+            node = {
+                "name": name,
+                "type": "directory" if item["is_dir"] else "file",
+                "mtime": item["mtime"],
+                "url": url
+            }
+            
+            if item["is_dir"]:
+                node["children"] = get_directory_tree(full_path, base_url)
+                # 检查是否有 index.html 以便前端提供快捷访问
+                if os.path.exists(os.path.join(full_path, "index.html")):
+                    node["hasIndex"] = True
+                    node["indexUrl"] = f"{url}/index.html"
+            else:
+                node["size"] = os.path.getsize(full_path)
+                
+            tree.append(node)
+    except Exception as e:
+        print(f"Error building tree for {path}: {e}")
+    return tree
+
 @app.get("/api/outputs")
 async def list_outputs():
-    files = []
     if os.path.exists(config.ALICE_OUTPUT_DIR):
-        for f in sorted(os.listdir(config.ALICE_OUTPUT_DIR), key=lambda x: os.path.getmtime(os.path.join(config.ALICE_OUTPUT_DIR, x)), reverse=True):
-            path = os.path.join(config.ALICE_OUTPUT_DIR, f)
-            if os.path.isfile(path):
-                files.append({
-                    "name": f,
-                    "size": os.path.getsize(path),
-                    "mtime": os.path.getmtime(path),
-                    "url": f"/outputs/{f}"
-                })
-    return {"files": files}
+        tree = get_directory_tree(config.ALICE_OUTPUT_DIR, "/outputs")
+        return {"files": tree}
+    return {"files": []}
 
 @app.get("/api/memory")
 async def get_memory():
