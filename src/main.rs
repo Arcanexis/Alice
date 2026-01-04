@@ -414,7 +414,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     let thinking_hint = if app.show_thinking { "显示思考过程 (Ctrl+O 隐藏)" } else { "隐藏思考过程 (Ctrl+O 显示)" };
     
     let token_info = if app.total_tokens > 0 {
-        format!(" | Context: {} (P: {} / C: {})", app.total_tokens, app.prompt_tokens, app.completion_tokens)
+        format!(" | Tokens: {} (P:{} C:{})", app.total_tokens, app.prompt_tokens, app.completion_tokens)
     } else {
         "".to_string()
     };
@@ -425,7 +425,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         Span::styled(status_text, status_style),
         Span::raw(" | "),
         Span::raw(thinking_hint),
-        Span::styled(token_info, Style::default().fg(Color::DarkGray)),
+        Span::styled(token_info, Style::default().fg(Color::White)),
     ]);
 
     let header = Paragraph::new(header_line)
