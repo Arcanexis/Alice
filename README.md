@@ -2,44 +2,50 @@
 
 > **⚠️ 免责声明**：本项目的所有代码均由 AI 生成。使用者在运行、部署或集成前，必须自行评估潜在的安全风险、逻辑缺陷及运行成本。作者不对因使用本项目而导致的任何损失负责。
 >
-> **💡 特别提示**：本项目主要为作者个人使用开发，包含特定的 **人格设定 (`prompts/alice.md`)** 及 **交互记忆记录 (`memory/`)**。相关文件会记录作者对话历史。如果您介意此类信息留存或设定风格，请勿直接使用，或请按需自行编辑或删除相关目录下的文件。
+> **💡 特别提示**：本项目包含特定的 **人格设定 (`prompts/alice.md`)** 及 **交互记忆记录 (`memory/`)**。相关文件会记录对话历史。如果您介意此类信息留存，请按需自行编辑或删除相关目录下的文件。
 
-Alice 是一个基于 ReAct 模式的智能体框架，具备分级记忆管理、动态技能加载及隔离执行环境。
+Alice 是一个基于 ReAct 模式的智能体框架，采用 **Rust TUI** 作为交互界面，**Python** 作为核心逻辑引擎，并在 **Docker 容器** 中执行具体任务，实现高性能交互与安全隔离的完美结合。
+
+---
 
 ## 1. 技术架构
 
-项目采用“宿主机核心 + 容器化沙盒”的隔离架构，确保执行环境的安全性和可复现性。本项目为纯终端交互模式。
+项目采用“Rust 终端界面 + Python 核心引擎 + 容器化沙盒”的三层隔离架构。
 
 ### 1.1 核心技术栈
-- **核心**: Python 3.8+, OpenAI API (compatible), Docker
-- **沙盒**: Ubuntu 24.04 (Docker), Python 虚拟环境, Node.js 环境
+- **用户界面 (TUI)**: Rust (Ratatui), 提供流畅的终端交互、实时思考过程显示及自动滚动历史。
+- **逻辑引擎 (Engine)**: Python 3.8+, OpenAI API (兼容模式), 负责状态机管理、指令拦截与记忆处理。
+- **安全沙盒 (Sandbox)**: Ubuntu 24.04 (Docker), Python 虚拟环境, Node.js 环境, Playwright。
 
-### 1.2 状态管理与记忆系统
-智能体状态通过三层分级记忆实现，所有记忆文件均持久化于宿主机物理存储。
-*   **短期记忆 (STM)**: 记录近 7 天的交互序列。系统启动时通过 `AliceAgent.manage_memory()` 实现滚动清理。
-*   **长期记忆 (LTM)**: 存储经 LLM 提炼后的高价值知识、用户偏好。通过 `memory --ltm` 指令可手动追加经验教训。
-*   **任务清单 (Todo)**: 存储当前活跃的任务及其完成状态，辅助智能体维持长线任务目标。
-*   **提炼逻辑**: 系统启动时，自动提取过期 STM 内容（超过 7 天）进行结构化总结并追加至 LTM。
+### 1.2 物理隔离与挂载策略
+为了保护宿主机安全，Alice 采用严格的物理隔离机制：
+*   **挂载项 (容器可见)**:
+    - `skills/` -> `/app/skills`: 存放可执行脚本（读写）。
+    - `alice_output/` -> `/app/alice_output`: 存放任务产出物（读写）。
+*   **非挂载项 (宿主机私有)**:
+    - `.env`: 包含敏感 API Key。
+    - `agent.py` / `tui_bridge.py`: 核心控制逻辑。
+    - `memory/` / `prompts/`: 长期记忆、短期记忆及系统提示词。
+*   **交互机制**: 宿主机引擎解析 LLM 的指令，仅将具体代码/命令通过 `docker exec` 发送至沙盒执行。
 
-### 1.3 环境隔离机制
-*   **自动化容器管理**: 系统启动时自动检测 `alice-sandbox` 镜像，若缺失则基于 `Dockerfile.sandbox` 自动构建。同时自动唤醒或初始化 `alice-sandbox-instance` 常驻容器。
-*   **挂载策略**: 
-    - 宿主机 `skills/` 目录：挂载至容器 `/app/skills`（读写），用于存放可执行脚本。
-    - 宿主机 `alice_output/` 目录：挂载至容器 `/app/alice_output`（读写），用于存放任务产出物。
-*   **非挂载项**: `agent.py`、`memory/`、`prompts/` 等核心逻辑不进入容器，防止恶意代码通过沙盒环境篡改宿主机状态或窃取隐私。
+### 1.3 状态管理与分级记忆
+*   **短期记忆 (STM)**: 记录近 7 天的交互。系统启动时通过 `AliceAgent.manage_memory()` 实现过期内容的滚动清理。
+*   **长期记忆 (LTM)**: 存储高价值知识。系统会自动提炼过期的 STM 内容并追加至 LTM。
+*   **任务清单 (Todo)**: 存储当前活跃任务，辅助智能体维持长线目标。
+*   **索引快照 (Snapshot)**: `SnapshotManager` 实时扫描 `skills/` 目录，生成文件索引快照注入 LLM 上下文。
 
 ---
 
 ## 2. 内置指令参考
 
-智能体通过宿主机引擎拦截并执行以下指令。这些指令在宿主机环境运行，而非沙盒容器：
+这些指令由宿主机引擎直接拦截并执行，具有管理项目的最高权限：
 
 | 指令 | 参数示例 | 描述 |
 | :--- | :--- | :--- |
 | `toolkit` | `list` / `info <name>` / `refresh` | 管理技能注册表。`refresh` 用于重新扫描 `skills/` 目录 |
-| `memory` | `"内容"` [`--ltm`] | 默认更新 STM。若带 `--ltm` 则追加至 LTM 的“经验教训”小节 |
+| `memory` | `"内容"` [`--ltm`] | 更新记忆。带 `--ltm` 追加至 LTM，否则更新 STM |
 | `update_prompt` | `"新的人设内容"` | 热更新 `prompts/alice.md` 系统提示词 |
-| `todo` | `"任务列表内容"` | 更新任务清单 |
+| `todo` | `"任务列表内容"` | 更新任务清单 `memory/todo.md` |
 
 ---
 
@@ -47,70 +53,60 @@ Alice 是一个基于 ReAct 模式的智能体框架，具备分级记忆管理�
 
 ```text
 .
-├── agent.py                # 核心逻辑：状态机管理、指令拦截与隔离调度
+├── src/                    # Rust TUI 源代码 (Ratatui)
+├── Cargo.toml              # Rust 项目配置文件
+├── agent.py                # Python 核心逻辑：状态机、指令拦截与隔离调度
+├── tui_bridge.py           # 桥接层：负责 Rust TUI 与 Python Engine 的 JSON 通信
+├── main.py                 # CLI 模式入口 (传统的纯终端对话)
 ├── snapshot_manager.py     # 资产索引：技能自动发现与快照生成
-├── main.py                 # 交互入口：CLI 模式下的对话循环
-├── config.py               # 配置管理：环境变量解析与路径定义
-├── .env.example            # 配置模板：环境变量示例文件
-├── Dockerfile.sandbox      # 沙盒环境：基于 Ubuntu 24.04 的 Python/Node 运行环境
-├── requirements.txt        # 容器依赖：基础镜像构建所需的 Python 库
-├── alice_output/           # 输出目录：存储任务执行过程中的生成文件（已挂载）
+├── Dockerfile.sandbox      # 沙盒镜像定义 (Ubuntu 24.04 + Python + Node)
+├── alice_output/           # 输出目录：存储任务生成的文件 (已挂载)
 ├── prompts/                # 指令目录：存放系统提示词 (alice.md)
-├── memory/                 # 状态目录：存放分级记忆文件
-│   ├── alice_memory.md     # 长期记忆 (LTM)
-│   ├── short_term_memory.md # 短期记忆 (STM)
-│   └── todo.md             # 任务清单 (Todo)
-└── skills/                 # 技能库：存放可执行的业务插件（已挂载）
-    ├── akshare/            # 金融数据技能
-    ├── fetch/              # 网络爬取技能
-    ├── file_explorer/      # 文件管理技能
-    ├── tavily/             # 搜索增强技能
-    ├── weather/            # 天气查询技能
-    └── weibo/              # 微博热搜技能
+├── memory/                 # 记忆目录：存放分级记忆文件 (LTM/STM/Todo)
+└── skills/                 # 技能库：19+ 内置技能 (已挂载)
+    ├── playwright_browser/ # 网页自动化与爬虫
+    ├── mcp-builder/        # MCP 服务端开发技能
+    ├── artifacts-builder/  # UI 组件与工件构建
+    ├── slack-gif-creator/  # 动态 GIF 生成
+    ├── docx/xlsx/pptx/     # Office 文档处理
+    ├── akshare/tavily/     # 金融数据与高级搜索
+    └── ...                 # 更多技能持续演进中
 ```
 
 ---
 
 ## 4. 快速开始
 
-### 4.1 通用配置
-1. **基础环境**: 确保已安装 **Python 3.8+** 和 **Docker**。
-2. **API 密钥**: 参考 `.env.example` 创建 `.env` 文件，并填写必要的 API Key。
+### 4.1 环境准备
+1. **基础依赖**: 安装 **Rust**, **Python 3.8+** 和 **Docker**。
+2. **配置 API**: 参考 `.env.example` 创建 `.env` 文件，填写 OpenAI 兼容的 API Key。
+3. **Docker 权限**: 确保当前用户有执行 `docker` 命令的权限。
 
-### 4.2 运行模式
-
-适用于直接在命令行与智能体交互：
+### 4.2 运行 TUI 模式 (推荐)
+提供交互式的终端界面，支持思考过程查看（Ctrl+O）。
 ```bash
-# 1. 安装核心依赖
-pip install openai python-dotenv
+# 启动 TUI 界面
+cargo run --release
+```
 
-# 2. 启动对话循环
+### 4.3 运行 CLI 模式
+传统的逐行对话模式。
+```bash
+# 安装 Python 依赖
+pip install -r requirements.txt
+# 启动对话
 python main.py
 ```
 
-### 4.3 技能扩展流程
-1. 在 `skills/` 目录下创建子目录。
-2. 编写 `SKILL.md`，包含必需的 `name` 和 `description` 元数据（YAML 格式）。
-3. 编写执行代码（Python/Node.js 等）。
-4. 在交互中运行 `toolkit refresh` 即可完成动态加载。
+---
+
+## 5. 安全与自演进
+
+*   **指令审查**: 拦截危险指令（如 `rm`），防止沙盒内意外删除。
+*   **最小权限**: 容器以非特权模式常驻运行，仅允许访问特定挂载目录。
+*   **技能自主开发**: Alice 具备在沙盒内编写、测试并注册新技能的能力。现有的多项技能（如 `weather`, `weibo`）均由 Alice 独立编写并动态集成。
 
 ---
 
-## 5. 安全模型
-*   **指令审查**: `is_safe_command` 拦截危险指令（如 `rm`），防止沙盒内意外删除。
-*   **物理隔离**: 核心代码与密钥文件（.env）不挂载入容器。
-*   **最小权限**: 容器以非特权模式运行，仅允许访问挂载的特定目录。
-
----
-
-## 6. 自主演进能力
-
-Alice 具备在隔离环境内的自我进化特性：
-*   **技能自主开发**: 现有的 `weather` 和 `weibo` 技能均由 Alice 独立编写并动态集成。
-*   **配置自主管理**: 能够自主维护配置文件（如在指导下配置容器内的 API Key）。
-*   **自我升级**: Alice 拥有容器内的相应权限，建议保持该环境的开放性，以支持更高级的“自升级”与任务自动化。
-
----
-
-## 7. 许可证
+## 6. 许可证
 项目遵循 MIT 开源协议。
