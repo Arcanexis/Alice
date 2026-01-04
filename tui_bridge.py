@@ -97,37 +97,50 @@ def main():
                                     # 查找代码块开始标记
                                     start_idx = pending_buffer.find("```")
                                     if start_idx == -1:
-                                        # 如果没有发现 ```，但末尾可能存在截断的 ` 或 ``
-                                        # 逻辑：保留最后两个字符以防跨 chunk
-                                        safe_len = max(0, len(pending_buffer) - 2)
-                                        if safe_len > 0:
-                                            to_send = pending_buffer[:safe_len]
-                                            print(json.dumps({"type": "content", "content": to_send}), flush=True)
-                                            pending_buffer = pending_buffer[safe_len:]
-                                        break
+                                        # 如果没有发现 ```，检查末尾是否有可能是 ``` 的一部分
+                                        # 如果以 ` 结尾，可能后面还有 `
+                                        backtick_count = 0
+                                        if pending_buffer.endswith("``"): backtick_count = 2
+                                        elif pending_buffer.endswith("`"): backtick_count = 1
+                                        
+                                        if backtick_count > 0:
+                                            # 保留可能的 ` 序列，发送前面的
+                                            to_send = pending_buffer[:-backtick_count]
+                                            if to_send:
+                                                print(json.dumps({"type": "content", "content": to_send}), flush=True)
+                                            pending_buffer = pending_buffer[-backtick_count:]
+                                            break
+                                        else:
+                                            # 没有 `，直接全部发送
+                                            print(json.dumps({"type": "content", "content": pending_buffer}), flush=True)
+                                            pending_buffer = ""
                                     else:
                                         # 发送开始之前的普通文本
                                         if start_idx > 0:
                                             print(json.dumps({"type": "content", "content": pending_buffer[:start_idx]}), flush=True)
                                         
                                         in_code_block = True
-                                        # 我们需要等待看到完整的 ```xxx 来确定如何处理，
-                                        # 但为了即时性，直接进入代码块模式
                                         pending_buffer = pending_buffer[start_idx:]
-                                        # 注意：这里不打印 ```，因为它属于代码块，将被发送到 thinking
                                 else:
-                                    # 已经在代码块中，查找结束标记
-                                    # 注意：跳过起始的 ```
+                                    # 已经在代码块中，查找结束标记 (跳过起始的 ```)
                                     end_idx = pending_buffer.find("```", 3)
                                     if end_idx == -1:
-                                        # 全部作为思考发送
-                                        # 同样保留末尾以防跨 chunk
-                                        safe_len = max(0, len(pending_buffer) - 2)
-                                        if safe_len > 0:
-                                            to_send = pending_buffer[:safe_len]
-                                            print(json.dumps({"type": "thinking", "content": to_send}), flush=True)
-                                            pending_buffer = pending_buffer[safe_len:]
-                                        break
+                                        # 同理，检查末尾是否可能是结束标记的一部分
+                                        backtick_count = 0
+                                        if pending_buffer.endswith("``"): backtick_count = 2
+                                        elif pending_buffer.endswith("`"): backtick_count = 1
+                                        
+                                        # 注意：在代码块内，我们必须看到完整的 ``` 才能退出，
+                                        # 但为了即时渲染，我们可以发送确定不是结束标记的部分
+                                        if backtick_count > 0:
+                                            to_send = pending_buffer[:-backtick_count]
+                                            if to_send:
+                                                print(json.dumps({"type": "thinking", "content": to_send}), flush=True)
+                                            pending_buffer = pending_buffer[-backtick_count:]
+                                            break
+                                        else:
+                                            print(json.dumps({"type": "thinking", "content": pending_buffer}), flush=True)
+                                            pending_buffer = ""
                                     else:
                                         # 找到闭合，发送代码块内容并切换状态
                                         code_block_full = pending_buffer[:end_idx + 3]
@@ -135,10 +148,12 @@ def main():
                                         pending_buffer = pending_buffer[end_idx + 3:]
                                         in_code_block = False
 
-                # 处理最后剩余的缓冲区
+                # 处理最后剩余的缓冲区 (强制刷新 Flush)
                 if pending_buffer:
+                    logger.info(f"强制刷新缓冲区 (in_code_block={in_code_block}): {pending_buffer}")
                     msg_type = "thinking" if in_code_block else "content"
                     print(json.dumps({"type": msg_type, "content": pending_buffer}), flush=True)
+                    pending_buffer = ""
 
                 # 检查工具调用
                 import re
