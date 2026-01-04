@@ -39,7 +39,7 @@ class AliceAgent:
         # 启动时管理记忆（滚动与提炼）
         self.manage_memory()
         
-        self._refresh_system_message()
+        self._refresh_context()
 
     def _ensure_docker_environment(self):
         """确保 Docker 环境就绪，实现核心隔离与自动化唤醒"""
@@ -99,8 +99,8 @@ class AliceAgent:
             print(f"初始化 Docker 环境时出错: {e}")
             sys.exit(1)
 
-    def _refresh_system_message(self):
-        """刷新系统消息，注入最新的提示词、长期记忆、短期记忆、即时记忆、任务清单和文件索引快照"""
+    def _refresh_context(self):
+        """刷新上下文，分离人格设定 (System) 与记忆背景 (User)"""
         self.system_prompt = self._load_prompt()
         self.memory_content = self._load_file_content(self.memory_path, "暂无长期记忆。")
         self.stm_content = self._load_file_content(self.stm_path, "暂无近期记忆。")
@@ -109,15 +109,7 @@ class AliceAgent:
         self.snapshot_mgr.refresh() # 刷新快照
         self.index_text = self.snapshot_mgr.get_index_text()
         
-        loaded_files = [
-            self.prompt_path,
-            self.memory_path,
-            self.stm_path,
-            self.todo_path
-        ]
-        files_list_str = "\n".join([f"- {f}" for f in loaded_files])
-        
-        # 环境上下文提示
+        # 1. 构造 System Message (仅放人格设定和环境信息)
         env_context = (
             f"### 当前运行环境信息\n"
             f"- **宿主机工作目录**: `{self.project_root}`\n"
@@ -126,21 +118,45 @@ class AliceAgent:
             f"- **重要规则**: 请始终使用相对路径 (如 `skills/xxx`)，这在宿主机和容器中均通用。\n"
         )
 
-        full_system_content = (
-            f"【核心提示】：以下文件已全量加载到你的上下文中，你可以直接引用其内容：\n{files_list_str}\n\n"
-            f"{env_context}\n"
+        system_content = (
             f"{self.system_prompt}\n\n"
-            f"### 你的长期记忆 (来自 {self.memory_path})\n{self.memory_content}\n\n"
-            f"### 你的短期记忆 (最近 7 天，来自 {self.stm_path})\n{self.stm_content}\n\n"
-            f"### 你的即时对话背景 (最近几轮对话，来自 {self.working_memory_path})\n{self.working_memory_content}\n\n"
-            f"### 你的当前任务清单 (来自 {self.todo_path})\n{self.todo_content}\n\n"
-            f"### 核心资产索引快照\n{self.index_text}"
+            f"{env_context}"
         )
-        
-        if self.messages:
-            self.messages[0] = {"role": "system", "content": full_system_content}
+
+        # 2. 构造 Memory Context (作为 User Message 提示模型)
+        loaded_files = [
+            self.memory_path,
+            self.stm_path,
+            self.todo_path
+        ]
+        files_list_str = "\n".join([f"- {f}" for f in loaded_files])
+
+        memory_context_content = (
+            f"【记忆与背景信息注入】\n"
+            f"以下是你当前存储的记忆和任务状态，请作为后续对话的参考：\n\n"
+            f"### 长期记忆 (来自 {self.memory_path})\n{self.memory_content}\n\n"
+            f"### 短期记忆 (最近 7 天，来自 {self.stm_path})\n{self.stm_content}\n\n"
+            f"### 即时对话背景 (来自 {self.working_memory_path})\n{self.working_memory_content}\n\n"
+            f"### 当前任务清单 (来自 {self.todo_path})\n{self.todo_content}\n\n"
+            f"### 核心资产索引快照\n{self.index_text}\n\n"
+            f"--- 记忆注入结束，请开始/继续你的助理工作 ---"
+        )
+
+        # 3. 更新消息序列
+        # 保持 messages[0] 为 system, messages[1] 为 memory context
+        system_msg = {"role": "system", "content": system_content}
+        memory_msg = {"role": "user", "content": memory_context_content}
+
+        if not self.messages:
+            self.messages = [system_msg, memory_msg]
         else:
-            self.messages = [{"role": "system", "content": full_system_content}]
+            # 确保前两条是系统和记忆
+            self.messages[0] = system_msg
+            if len(self.messages) > 1 and self.messages[1].get("role") == "user" and "【记忆与背景信息注入】" in self.messages[1].get("content", ""):
+                self.messages[1] = memory_msg
+            else:
+                # 插入记忆消息
+                self.messages.insert(1, memory_msg)
 
     def _load_prompt(self):
         try:
@@ -540,7 +556,7 @@ class AliceAgent:
             feedback = "\n\n".join(results)
             self.messages.append({"role": "user", "content": f"容器执行反馈：\n{feedback}"})
             
-            # 刷新系统消息
-            self._refresh_system_message()
+            # 刷新上下文
+            self._refresh_context()
                 
             print(f"\n{'-'*40}\n系统快照已更新，结果已反馈给 Alice，继续生成中...")

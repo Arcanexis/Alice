@@ -146,7 +146,7 @@ def main():
                 
                 feedback = "\n\n".join(results)
                 alice.messages.append({"role": "user", "content": f"容器执行反馈：\n{feedback}"})
-                alice._refresh_system_message()
+                alice._refresh_context()
                 
         except EOFError:
             break
