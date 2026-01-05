@@ -16,6 +16,8 @@ class StreamManager:
     def __init__(self, buffer_size=30):
         self.buffer = ""
         self.in_code_block = False
+        self.current_end_tag = "```"
+        self.current_start_tag_len = 3
         self.buffer_size = buffer_size
 
     def process_chunk(self, chunk_text):
@@ -26,96 +28,85 @@ class StreamManager:
     def _try_dispatch(self, is_final=False):
         """尝试分发数据。如果非最后一次，则保留窗口余量以供预判"""
         output_msgs = []
-        # 用于追踪是否在当前循环中刚刚进入代码块
         just_entered_code_block = False
         
         while True:
-            # 如果缓冲区为空，直接跳出
             if not self.buffer:
                 break
 
             if not self.in_code_block:
-                # 寻找代码块起始标记
-                start_idx = self.buffer.find("```")
+                # 兼容多种标记形式
+                markers = [("```", "```"), ("<thought>", "</thought>"), ("<reasoning>", "</reasoning>"), ("<thinking>", "</thinking>")]
+                found_marker = None
+                start_idx = -1
+                
+                for start_tag, end_tag in markers:
+                    idx = self.buffer.find(start_tag)
+                    if idx != -1 and (start_idx == -1 or idx < start_idx):
+                        start_idx = idx
+                        found_marker = (start_tag, end_tag)
+
                 if start_idx == -1:
-                    # 没找到。
-                    # 如果不是最终输出，我们要保留末尾可能成为 ``` 的部分（仅限反引号）
                     if not is_final:
-                        # 检查末尾反引号 (ASCII 96)
-                        # 注意：不要误伤中文感叹号或其他标点
-                        backtick_count = 0
-                        if self.buffer.endswith("``"): backtick_count = 2
-                        elif self.buffer.endswith("`"): backtick_count = 1
+                        # 智能前缀保留
+                        hold_back = 0
+                        for start_tag, _ in markers:
+                            for i in range(len(start_tag)-1, 0, -1):
+                                if self.buffer.endswith(start_tag[:i]):
+                                    hold_back = max(hold_back, i)
+                                    break
                         
-                        safe_len = len(self.buffer) - backtick_count
-                        
+                        safe_len = len(self.buffer) - hold_back
                         if safe_len > 0:
-                            content = self.buffer[:safe_len]
-                            output_msgs.append({"type": "content", "content": content})
+                            output_msgs.append({"type": "content", "content": self.buffer[:safe_len]})
                             self.buffer = self.buffer[safe_len:]
-                        
-                        # 无论是否分发了 content，只要末尾有反引号，就必须 break 等待下一个 chunk
-                        if backtick_count > 0:
-                            break
-                        # 如果没有反引号且没找到 ```，说明当前 buffer 全是普通文本，
-                        # 但因为没有后续数据，在非 final 模式下，我们也已经处理完了
                         break
                     else:
-                        # 最终输出，直接全发
-                        if self.buffer:
-                            output_msgs.append({"type": "content", "content": self.buffer})
-                            self.buffer = ""
+                        output_msgs.append({"type": "content", "content": self.buffer})
+                        self.buffer = ""
                         break
                 else:
-                    # 找到了起始标记！
-                    # 在发送 start_idx 之前的内容前，我们要确保 ``` 后面跟着的东西也被预判了
-                    # 比如 ```bash\n，如果 buffer 只到 ```b，我们要等待（增加预判深度）
-                    if not is_final:
-                        remaining_len = len(self.buffer) - start_idx
-                        if remaining_len < 10: # 至少给标签留 10 个字符的观察期
-                            break
-
+                    # 发现起始标记，处理之前的正文
                     if start_idx > 0:
                         output_msgs.append({"type": "content", "content": self.buffer[:start_idx]})
                     
                     self.in_code_block = True
+                    self.current_end_tag = found_marker[1]
+                    self.current_start_tag_len = len(found_marker[0])
                     just_entered_code_block = True
                     self.buffer = self.buffer[start_idx:]
-                    # 继续处理代码块内部
             else:
-                # 已经在代码块中，寻找结束标记
-                # 仅在同一轮循环中刚刚进入代码块时，才需要跳过当前的起始标记 (offset=3)
-                # 如果是跨 chunk 处理，则起始位置应该是 0
-                search_offset = 3 if just_entered_code_block else 0
-                end_idx = self.buffer.find("```", search_offset)
-                just_entered_code_block = False # 重置状态
+                # 已经在隔离块中，寻找结束标记
+                search_offset = self.current_start_tag_len if just_entered_code_block else 0
+                end_idx = self.buffer.find(self.current_end_tag, search_offset)
+                just_entered_code_block = False 
                 
                 if end_idx == -1:
-                    # 没找到结束标记。同理，保留可能的截断 `
                     if not is_final:
-                        backtick_count = 0
-                        if self.buffer.endswith("``"): backtick_count = 2
-                        elif self.buffer.endswith("`"): backtick_count = 1
+                        # 同样需要保留结束标签的前缀
+                        hold_back = 0
+                        for i in range(len(self.current_end_tag)-1, 0, -1):
+                            if self.buffer.endswith(self.current_end_tag[:i]):
+                                hold_back = i
+                                break
                         
-                        safe_len = len(self.buffer) - backtick_count
+                        safe_len = len(self.buffer) - hold_back
                         if safe_len > 0:
-                            thinking = self.buffer[:safe_len]
-                            output_msgs.append({"type": "thinking", "content": thinking})
+                            output_msgs.append({"type": "thinking", "content": self.buffer[:safe_len]})
                             self.buffer = self.buffer[safe_len:]
                         break
                     else:
-                        if self.buffer:
-                            output_msgs.append({"type": "thinking", "content": self.buffer})
-                            self.buffer = ""
+                        output_msgs.append({"type": "thinking", "content": self.buffer})
+                        self.buffer = ""
                         break
                 else:
-                    # 找到了结束标记！
-                    # 将直到结束标记的内容全部发给 thinking
-                    thinking_end = end_idx + 3
+                    # 发现结束标记，闭合思考块
+                    thinking_end = end_idx + len(self.current_end_tag)
                     output_msgs.append({"type": "thinking", "content": self.buffer[:thinking_end]})
                     self.buffer = self.buffer[thinking_end:]
                     self.in_code_block = False
-                    # 切换回普通模式，继续循环处理 buffer 剩余部分
+        
+        return output_msgs
         
         return output_msgs
 
@@ -217,10 +208,41 @@ def main():
                         }), flush=True)
 
                     if chunk.choices:
-                        delta = chunk.choices[0].delta
-                        # 容错处理：确保字段存在且不为 None，防止拼接异常或截断
-                        t_chunk = getattr(delta, 'reasoning_content', '') or ""
-                        c_chunk = getattr(delta, 'content', '') or ""
+                        choice = chunk.choices[0]
+                        delta = getattr(choice, 'delta', None) or choice
+                        
+                        # 极度兼容的读取函数
+                        def get_val(obj, names):
+                            for name in names:
+                                # 1. 直接属性访问
+                                res = getattr(obj, name, None)
+                                if res: return res
+                                # 2. 字典访问
+                                if isinstance(obj, dict):
+                                    res = obj.get(name)
+                                    if res: return res
+                                # 3. Pydantic 额外字段访问
+                                if hasattr(obj, 'model_extra') and obj.model_extra:
+                                    res = obj.model_extra.get(name)
+                                    if res: return res
+                            return ""
+
+                        # 诊断日志：仅在每一轮对话的第一个 chunk 记录结构
+                        if not full_content and not thinking_content:
+                            try:
+                                d_keys = list(delta.keys()) if isinstance(delta, dict) else list(getattr(delta, '__dict__', {}).keys())
+                                if hasattr(delta, 'model_extra') and delta.model_extra:
+                                    d_keys += [f"extra:{k}" for k in delta.model_extra.keys()]
+                                logger.info(f"探测到响应结构: Delta_Keys={d_keys}")
+                            except: pass
+
+                        # 扩充字段名变体
+                        think_names = ['reasoning_content', 'reasoningContent', 'reasoning', 'thought', 'thought_content', 'thoughtContent']
+                        t_chunk = get_val(delta, think_names)
+                        # 如果 delta 里没找到，尝试在 choice 级找 (某些非标代理)
+                        if not t_chunk: t_chunk = get_val(choice, think_names)
+                        
+                        c_chunk = get_val(delta, ['content'])
                         
                         if t_chunk:
                             thinking_content += t_chunk

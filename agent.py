@@ -545,16 +545,33 @@ class AliceAgent:
                     logger.info("检测到中断信号，停止生成。")
                     break
                 if chunk.choices:
-                    delta = chunk.choices[0].delta
-                    # 容错处理：确保字段存在且不为 None，防止拼接异常或截断
-                    t_chunk = getattr(delta, 'reasoning_content', '') or ""
-                    c_chunk = getattr(delta, 'content', '') or ""
+                    choice = chunk.choices[0]
+                    delta = getattr(choice, 'delta', None) or choice
+                    
+                    # 极度兼容的读取函数
+                    def get_val(obj, names):
+                        for name in names:
+                            res = getattr(obj, name, None)
+                            if res: return res
+                            if isinstance(obj, dict):
+                                res = obj.get(name)
+                                if res: return res
+                            if hasattr(obj, 'model_extra') and obj.model_extra:
+                                res = obj.model_extra.get(name)
+                                if res: return res
+                        return ""
+
+                    # 兼容多种模型的思考字段
+                    think_names = ['reasoning_content', 'reasoningContent', 'reasoning', 'thought', 'thought_content', 'thoughtContent']
+                    t_chunk = get_val(delta, think_names)
+                    if not t_chunk: t_chunk = get_val(choice, think_names)
                     
                     if t_chunk:
                         logger.debug(f"Thinking Chunk: {t_chunk}")
                         print(t_chunk, end='', flush=True)
                         thinking_content += t_chunk
                     
+                    c_chunk = get_val(delta, ['content'])
                     if c_chunk: # 移除 elif，防止同一 chunk 中包含两种内容时丢失正文首字
                         logger.debug(f"Content Chunk: {c_chunk}")
                         if not done_thinking:
