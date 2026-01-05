@@ -14,16 +14,25 @@ logger = logging.getLogger("TuiBridge")
 
 class StreamManager:
     """流式数据管理器，使用缓冲区预判代码块状态，确保 UI 分流精确"""
-    def __init__(self, buffer_size=30):
+    def __init__(self, max_buffer_size=10*1024*1024):  # 10MB 默认限制
         self.buffer = ""
         self.in_code_block = False
         self.current_end_tag = "```"
         self.current_start_tag_len = 3
-        self.buffer_size = buffer_size
+        self.max_buffer_size = max_buffer_size
 
     def process_chunk(self, chunk_text):
         """处理新到达的文本块"""
         self.buffer += chunk_text
+
+        # P0 修复: 防止缓冲区无限增长导致 OOM
+        if len(self.buffer) > self.max_buffer_size:
+            logger.warning(f"StreamManager 缓冲区超限 ({len(self.buffer)} > {self.max_buffer_size})，强制冲刷")
+            output = self._try_dispatch(is_final=True)
+            self.buffer = ""  # 清空缓冲区
+            self.in_code_block = False  # 重置状态
+            return output
+
         return self._try_dispatch()
 
     def _try_dispatch(self, is_final=False):
@@ -80,8 +89,8 @@ class StreamManager:
                 # 已经在隔离块中，寻找结束标记
                 search_offset = self.current_start_tag_len if just_entered_code_block else 0
                 end_idx = self.buffer.find(self.current_end_tag, search_offset)
-                just_entered_code_block = False 
-                
+
+                # P0 修复: 仅在找到结束标签或输出内容后才重置标志
                 if end_idx == -1:
                     if not is_final:
                         # 同样需要保留结束标签的前缀
@@ -106,6 +115,7 @@ class StreamManager:
                     output_msgs.append({"type": "thinking", "content": self.buffer[:thinking_end]})
                     self.buffer = self.buffer[thinking_end:]
                     self.in_code_block = False
+                    just_entered_code_block = False  # 找到结束标签后重置
         
         return output_msgs
 
@@ -182,7 +192,7 @@ def main():
                 print(json.dumps({"type": "status", "content": "thinking"}), flush=True)
 
                 # 初始化流管理器 (滑动窗口预判)
-                stream_mgr = StreamManager(buffer_size=30)
+                stream_mgr = StreamManager(max_buffer_size=10*1024*1024)  # 10MB 限制
                 usage = None
                 
                 for chunk in response:
