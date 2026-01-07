@@ -14,12 +14,13 @@ logger = logging.getLogger("TuiBridge")
 
 class StreamManager:
     """流式数据管理器，使用缓冲区预判代码块状态，确保 UI 分流精确"""
-    def __init__(self, max_buffer_size=10*1024*1024):  # 10MB 默认限制
+    def __init__(self, max_buffer_size=10*1024*1024, window_size=20):  # 10MB 默认限制
         self.buffer = ""
         self.in_code_block = False
         self.current_end_tag = "```"
         self.current_start_tag_len = 3
         self.max_buffer_size = max_buffer_size
+        self.window_size = window_size # 滑动预判窗口大小
 
     def process_chunk(self, chunk_text):
         """处理新到达的文本块"""
@@ -45,27 +46,60 @@ class StreamManager:
                 break
 
             if not self.in_code_block:
-                # 兼容多种标记形式
-                markers = [("```", "```"), ("<thought>", "</thought>"), ("<reasoning>", "</reasoning>"), ("<thinking>", "</thinking>")]
+                # 兼容多种标记形式，增加 tool_call, python, cat 等识别判断
+                markers = [
+                    ("```python", "```"),
+                    ("```bash", "```"),
+                    ("```", "```"),
+                    ("<thought>", "</thought>"),
+                    ("<reasoning>", "</reasoning>"),
+                    ("<thinking>", "</thinking>"),
+                    ("<tool_call>", "</tool_call>"),
+                    ("<python>", "</python>"),
+                ]
+                
+                # 裸关键词识别 (通常出现在行首或空白后)
+                naked_keywords = ["python ", "cat ", "ls ", "grep ", "mkdir "]
+                
                 found_marker = None
                 start_idx = -1
                 
+                # 1. 优先匹配显式标记
                 for start_tag, end_tag in markers:
                     idx = self.buffer.find(start_tag)
                     if idx != -1 and (start_idx == -1 or idx < start_idx):
                         start_idx = idx
                         found_marker = (start_tag, end_tag)
+                
+                # 2. 匹配裸关键词 (防止代码直接出现在正文)
+                for kw in naked_keywords:
+                    # 使用正则检测行首或特定位置的关键词
+                    kw_match = re.search(r'(?:^|\n)' + re.escape(kw), self.buffer)
+                    if kw_match:
+                        idx = kw_match.start()
+                        if start_idx == -1 or idx < start_idx:
+                            start_idx = idx
+                            # 对于裸关键词，我们假设它会持续到下一个双换行或 buffer 结束，或者被包裹在虚拟思考区
+                            found_marker = (kw_match.group(), "\n\n") 
 
                 if start_idx == -1:
                     if not is_final:
-                        # 智能前缀保留
-                        hold_back = 0
+                        # 智能前缀保留 (滑动延迟检测)
+                        # 保留 window_size 长度，或者保留标记的前缀
+                        hold_back = self.window_size
                         for start_tag, _ in markers:
                             for i in range(len(start_tag)-1, 0, -1):
                                 if self.buffer.endswith(start_tag[:i]):
                                     hold_back = max(hold_back, i)
                                     break
                         
+                        # 额外检查 naked_keywords 的前缀
+                        for kw in naked_keywords:
+                            for i in range(len(kw)-1, 0, -1):
+                                if self.buffer.endswith(kw[:i]):
+                                    hold_back = max(hold_back, i)
+                                    break
+
                         safe_len = len(self.buffer) - hold_back
                         if safe_len > 0:
                             output_msgs.append({"type": "content", "content": self.buffer[:safe_len]})
